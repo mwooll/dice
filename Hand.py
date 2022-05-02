@@ -1,6 +1,5 @@
 # Hand
 import pandas as pd
-from termcolor import colored
 
 from Dice import Dice
 
@@ -14,12 +13,9 @@ class Hand:
         self._rolls_num = base
 
     def add_die(self,
-            numbers:    list,
-            name:       str=None, 
-            colour:     str=None, 
-            hex_colour: int=0,
-            index:      int=None) -> None:
-        new_dice = Dice(numbers, name, colour, hex_colour, index)
+                numbers: list,
+                name: str=None):
+        new_dice = Dice(numbers, name)
         self._dice[new_dice.name] = new_dice
 
     def get_number_of_dice(self):
@@ -131,36 +127,6 @@ class Hand:
             df = df[0: -2]
         return df
 
-    def coloured_results(self) -> str:
-        output  = ""
-        for roll in range(self.rolls_num):
-            output += "\t"
-            for die in self._dice.values():
-                output += f"{colored(str(die), self.recol(die.colour))}\t\t"
-    
-            for attacker in self._dice.values():
-                output += f"\n{colored(str(attacker), self.recol(attacker.colour))}\t"
-                for defender in self._dice.values():
-                    colour  = None
-                    string  = attacker.battles[roll][str(defender)]["result"][2]
-
-                    if attacker.battles[roll][str(defender)]["result"][0] != "tie":
-                        try:
-                            colour = (attacker.colour*(eval(string[:-1]) > 50) 
-                                   + defender.colour*(eval(string[:-1]) < 50))
-                            
-                        except:
-                            colour = None
-
-                    output += f"{colored(string, self.recol(colour))}\t"
-            output += "\n\n"
-        return output
-
-    @staticmethod
-    def recol(colour):
-        if colour in [None, "black", ""]:
-            return None
-        return colour
 
 if __name__ == "__main__":
     h = Hand(1)
