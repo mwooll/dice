@@ -3,26 +3,10 @@
 import numpy as np
 import heapq as hq
 from copy import deepcopy
-from itertools import product
 from unittest import main, TestCase
 
 from Hand import Hand
 
-
-def get_grime_combinations(n_dice, n_opp):
-    dice = [k for k in range(n_dice)]
-    combinations = dice[:]
-    for k in range(1, n_opp):
-        to_remove = set()
-        combinations = set(product(combinations, dice))
-        for combi in combinations:
-            if combi != tuple(sorted(combi)):
-                to_remove.add(combi)
-            elif len(set(combi)) < len(combi):
-                to_remove.add(combi)
-        combinations = combinations.difference(to_remove)
-    return combinations
-    
 
 class Optimized_Hand(Hand):
     def __init__(self,
@@ -32,12 +16,12 @@ class Optimized_Hand(Hand):
                  starting_dice: list=None,
                  roll_nums: list=None,
                  rng=None, #random number generator
-                 opponents: int=None):
+                 opponents: int=1,
+                 cut_off: float=0):
         super().__init__()
         if rng is None:
             self.rng = np.random.default_rng()
         else:
-            print("rng")
             self.rng = rng
 
         if starting_dice is not None:
@@ -54,14 +38,10 @@ class Optimized_Hand(Hand):
         self._rolls_num = max(self._interested)
         self._second_hand = Hand()
 
+        self._num_opp = opponents
+        self.get_combinations(dice_num, opponents)  
 
-        combinations = [die for die in self._dice.keys()]
-        if opponents is not None:
-            numbers = get_grime_combinations(dice_num, opponents)
-            combinations = [[combinations[num] for num in combi]
-                            for combi in numbers]
-        self._combinations = combinations
-            
+        self._cut_off = 0          
 
     def create_random_die(self, face_num, face_average):
         """ creating a radnom die """
@@ -72,6 +52,7 @@ class Optimized_Hand(Hand):
             max_face -= new_face
             faces.append(new_face)
         faces.append(max_face)
+        print(faces)
         return faces
 
     def create_random_hand(self, dice_num, face_average, num_faces):
@@ -101,17 +82,34 @@ class Optimized_Hand(Hand):
         efron_rating = sum(worst_ratings[k] for k in self._interested)
         return efron_rating
 
-    def grime_criterion(self, hand):
+    def greedy_criterion(self, hand):
         """
         this criterion is maximal, when for every specified combination of dice
-        there exists a die that has a greater than 50% chance to beat both
-        when we can also decide how many dice are rolled.
+        there exists a die that has a large chance to beat all of them,
+        when that die also can decide how many dice are rolled.
         """
         single_ratings = []
-        frame = hand.frame_results(self._interested)
-        for combi in self._combinations:
-            single_ratings = max()
-        grime_rating = sum(single_ratings)
+        raw = hand.raw_results(self._interested, self._cut_off)
+        single_ratings = [max([sum(raw.loc[k, combi])
+                               for k in range(len(raw))])
+                          for combi in self._combinations[self._num_opp]]
+        greedy_rating = sum(single_ratings)/len(self._combinations[self._num_opp])/self._num_opp
+        return greedy_rating
+
+    def grime_criterion(self, hand):
+        """
+        similar to the greedy criterion but punishes if one die is too strong.
+        and hence is maximal when every die is needed to beat some combinations.
+        """
+        raw = hand.raw_results(self._interested)
+        greedy_rating = self.greedy_criterion(self)
+
+        variance = 0
+        mean = 0.5 # mean chance of winning
+        for col in self._dice:
+            variance += sum((raw[col] - mean)**2)
+        variance /= self.get_number_of_dice()
+        grime_rating = greedy_rating - variance
         return grime_rating
 
     """ main part """
@@ -137,9 +135,6 @@ class Optimized_Hand(Hand):
         if numbers[die][j] > 0:
             numbers[die][i] += 1
             numbers[die][j] -= 1
-        else:
-            numbers[die][j] += 2
-            numbers[die][i] -= 2
         hand.set_dice_set(numbers)
         hand.roll_the_dice(self._rolls_num)
         return hand
@@ -149,7 +144,8 @@ class Optimized_Hand(Hand):
         copy = deepcopy(current)
         self.roll_the_dice(self._rolls_num)
         rating = self.criterion(self)
-        hand_heap = [(-rating, -1, copy)]
+        priority = (self.calculate_simplicity(), -1)
+        hand_heap = [(-rating, priority, copy)]
         for n in range(n_iter):
             # print(hand_heap)
             # making random changes and calculating the new rating
@@ -165,44 +161,53 @@ class Optimized_Hand(Hand):
                 current = self._second_hand.get_faces()
                 copy = deepcopy(current)
                 rating = new_rating
-                hq.heappush(hand_heap, (-rating, n, copy))
+                priority = (self._second_hand.calculate_simplicity(), n)
+                hq.heappush(hand_heap, (-rating, priority, copy))
 
         """ retrieving the best hand """
         # print(hand_heap)
-        candidate = hq.heappop(hand_heap)
+        first = hand_heap[0]
+        promising = [candidate for candidate in hand_heap
+                     if candidate[0] == first[0]]
+        candidate = promising[self.rng.choice(len(promising))]
         self.set_dice_set(candidate[-1])
-        # print(candidate)
+        print(candidate)
 
-    def efron_optimize(self, n_iter=500, factor=0.98, min_temp=0.01, cycles=10):
-        """ using the efron criterion to optimize hand """
-        # setting parameters
-        self.criterion = self.efron_criterion
+    def optimize_hand(self,
+                      criterion: str="grime" or "efron" or "greedy",
+                      n_iter: int=500,
+                      factor: float=0.98,
+                      cycles: int=10):
+        """ uses the specified criterion to find a optimal set of dice """
+        # determining the criterion
+        lower = criterion.lower()
+        if lower == "efron":
+            self.criterion = self.efron_criterion
+        elif lower == "greedy":
+            self.criterion = self.greedy_criterion
+            if self._num_opp < 2:
+                raise Exception("the greedy criterion is not suited with 1 opponent.")
+        elif lower == "grime":
+            self.criterion = self.grime_criterion
+            if self._num_opp < 2:
+                raise Exception("the grime criterion is not suited with 1 opponent.")
+        else:
+            raise Exception(f"Criterion {lower} unknown. Valid " +
+                            'criteria are "grime", "efron" and "greedy".')
+
         temperature = max(0.1, self.find_initial_temperature(100))
-        # we take the max with 0.1 to avoid a starting temperature of 0
         print(f"starting temperature is {temperature}")
 
         # optimizing the hand
-        # while temperature > min_temp:
-        for k in range(cycles): # easier to debug
-            # print(f"{k}:  temperature = {temperature}")
+        for k in range(cycles): 
+            print(f"{k}:  temperature = {temperature}")
             # print(self._dice)
             self.metropolis(n_iter, temperature)
             temperature *= factor
 
-        self.roll_the_dice()
-        print(f"\nfinal Efron rating is {self.criterion(self)}")
+        self.roll_the_dice(self._rolls_num)
+        print(f"\nfinal {lower} rating is {self.criterion(self)}")
         return self.get_faces()
-
-    # def grime_optimize(self, n_opponents=2, n_iter=500, factor=0.98):
-    #     """ using the grime criterion to optimize hand """
-    #     # setting parameters
-    #     self.criterion = self.grime_criterion
-    #     self.die_num = die_sum
-    #     self.num_opponents = n_opponents
-    #     # optimizing the hand
-    #     self.metropolis(n_iter)
-    #     return self._dice
-
     
 class TestOptimizer(TestCase):
     def test_efron_criterion_single(self):
@@ -223,85 +228,113 @@ class TestOptimizer(TestCase):
         expected = round(2/9 + 1/9, 5)
         self.assertAlmostEqual(actual, expected)
 
-    def test_grime_criterion_one_opponent(self):
-        rowett_dice = [[2, 5], [3, 3, 3, 3, 3, 6], [1, 4, 4, 4, 4, 4]]
-        rowett = Optimized_Hand(starting_dice=rowett_dice, roll_nums=[1, 2])
-        rowett.roll_the_dice(rolls=2, accuracy=5)
-
-        actual = rowett.grime_criterion(rowett)
-        expected = 1
-        self.assertAlmostEqual(actual, expected)
-
-    def test_grime_criterion_two_opponents(self):
-        grime_dice = [[2, 7], [1, 6, 6], [0, 5, 5, 5, 5, 5],
-                      [4, 4, 4, 4, 4, 9], [3, 3, 8]]
-        grime = Optimized_Hand(starting_dice=grime_dice, roll_nums=[1, 2])
-        grime.roll_the_dice(rolls=2, accuracy=5)
-
-        actual = grime.grime_criterion(grime)
-        expected = 1
-        self.assertAlmostEqual(actual, expected)
-
-
-def find_Efron_dice():
-    dice_num = 3
-    roll_nums = [1]
-    face_average = 2
-    hand = Optimized_Hand(dice_num=dice_num,
-                          roll_nums=roll_nums,
-                          face_average=face_average)
-    print(hand._dice)
-    hand.roll_the_dice(1)
-    print(hand.efron_criterion(hand))
 
 def optimize_Efron():
     dice_num = 3
-    num_faces = 3
-    roll_nums = [1, 2]
-    face_average = 4
-    rng = np.random.default_rng(2)
+    num_faces = 6
+    roll_nums = [1]
+    face_average = 21/6
+    rng = np.random.default_rng(5)
     hand = Optimized_Hand(dice_num=dice_num,
                           roll_nums=roll_nums,
                           face_average=face_average,
-                           rng=rng,
+                          rng=rng,
                           num_faces=num_faces)
     print(hand._dice)
 
-    n_iter = 200
-    factor = 0.98
-    min_temp = 0.1
-    dice_set = hand.efron_optimize(n_iter, cycles=25)
+    n_iter = 2000
+    dice_set = hand.optimize_hand("efron", n_iter, cycles=25)
     print(dice_set)
     return dice_set
 
 def test_efron(dice=None):
     if dice is None:
         dice = [[2], [1, 1, 4], [0, 3, 3]]
-        # dice = [[4, 4, 4], [1, 5, 6], [2, 3, 7]]
-        # dice = [[2, 3, 3, 8], [3, 3, 5, 5], [0, 4, 6, 6], [1, 1, 7, 7]]
-        # dice = [[0, 4, 4], [3], [2, 2, 6], [1, 5]]
         dice = [[2, 5, 5], [4, 4, 4], [3, 3, 6]]
-    hand = Optimized_Hand(starting_dice=dice, roll_nums=[1, 2])
-    hand.roll_the_dice(2, ".")
+        dice = [[1, 1, 5, 5], [1, 2, 3, 6], [1, 3, 4, 4]]
+    hand = Optimized_Hand(starting_dice=dice, roll_nums=[1])
+    hand.roll_the_dice(1, ".")
     print(hand.efron_criterion(hand))
+    print(hand.frame_results([1]))
+    return hand
+
+def optimize_greedy():
+    dice_num = 5
+    num_faces = 5
+    roll_nums = [1, 2]
+    face_average = 4
+    rng = np.random.default_rng(2)
+    hand = Optimized_Hand(dice_num=dice_num,
+                          roll_nums=roll_nums,
+                          face_average=face_average,
+                          rng=rng,
+                          num_faces=num_faces,
+                          opponents=2,
+                          cut_off=0.50)
+    print(hand._dice)
+
+    n_iter = 100
+    dice_set = hand.optimize_hand("greedy", n_iter, cycles=10)
+    print(dice_set)
+    return dice_set
+
+def test_greedy(dice=None):
+    opponents = 2
+    rolls = 2
+    if dice is None:
+        dice = [[0, 2, 10], [3, 4, 5], [1, 2, 9]]
+    hand = Optimized_Hand(starting_dice=dice,
+                          roll_nums=[k for k in range(1, rolls+1)],
+                          opponents=opponents)
+    hand.roll_the_dice(rolls, ".")
+    hand.get_combinations(len(dice), opponents)
+    print(hand.greedy_criterion(hand,))
     print(hand.frame_results([1, 2]))
+    return hand
+
+def optimize_Grime():
+    dice_num = 5
+    num_faces = 5
+    roll_nums = [1, 2]
+    face_average = 4
+    rng = np.random.default_rng(3)
+    hand = Optimized_Hand(dice_num=dice_num,
+                          roll_nums=roll_nums,
+                          face_average=face_average,
+                          rng=rng,
+                          num_faces=num_faces,
+                          opponents=2)
+    print(hand._dice)
+
+    n_iter = 100
+    dice_set = hand.optimize_hand("grime", n_iter, cycles=10)
+    print(dice_set)
+    return dice_set
 
 def test_grime(dice=None):
+    opponents = 2
+    rolls = 2
     if dice is None:
-        dice = [[2, 7], [1, 6, 6], [0, 5, 5, 5, 5, 5],
-                [4, 4, 4, 4, 4, 9], [3, 3, 8]]
-        dice = [[2, 2, 2, 7, 7], [1, 1, 6, 6, 6], [0, 5, 5, 5, 5],
-                [4, 4, 4, 4, 4], [3, 3, 3, 3, 8]]
-    hand = Optimized_Hand(starting_dice=dice, roll_nums=[1, 2], opponents=2)
-    hand.roll_the_dice(2, ".")
+        # dice = [[1, 2, 9], [2, 2, 8], [3, 4, 5]]
+        dice = [[0, 1, 2, 3, 14], [2, 2, 3, 3, 10], [1, 2, 2, 3, 12],
+                [1, 2, 2, 2, 13], [3, 4, 4, 4, 5]]
+    hand = Optimized_Hand(starting_dice=dice,
+                          roll_nums=[k for k in range(1, rolls+1)],
+                          opponents=opponents)
+    hand.roll_the_dice(rolls, ".")
+    hand.get_combinations(len(dice), opponents)
     print(hand.grime_criterion(hand))
-    # print(hand.frame_results([1, 2]))
+    print(hand.frame_results([1, 2]))
+    return hand
 
 if __name__ == "__main__":
-    # main()
-    # find_Efron_dice()
-    # optimized = optimize_Efron()
-    out = test_efron()
-    # out = test_grime()
-    # print(out)
+    main()
 
+    # efron = optimize_Efron()
+    # out = test_efron()
+
+    # greedy = optimize_greedy()
+    # out = test_greedy()
+
+    # grime = optimize_Grime()
+    # out = test_grime()

@@ -1,7 +1,23 @@
 # Hand
 import pandas as pd
+# from itertools import product, reduce
 
 from Dice import Dice
+
+
+def get_grime_combinations(n_dice, n_opp):
+    if n_opp >= n_dice:
+        raise ValueError("No combinations can be found when rolling against " +
+                         f"{n_opp} opponents with only {n_dice} dice.")
+
+    dice = [[k] for k in range(n_dice)]
+    combinations = {1: dice}
+    for k in range(2, n_opp+1):
+        combi_k = [combi + die for die in dice
+                   for combi in combinations[k-1] if die[0] > combi[-1]]
+        combinations[k] = [item for item in combi_k]
+    return combinations
+    
 
 class Hand:
     def __init__(self):
@@ -33,6 +49,21 @@ class Hand:
             die.roll(rolls)
         self._rolls_num = rolls
 
+    def get_combinations(self, dice_num, opponents):
+        combinations = [die for die in self._dice.keys()]
+        if opponents > 1:
+            dice_num = len(combinations)
+            plain_combinations = get_grime_combinations(dice_num, opponents)
+            combinations = {k: [[combinations[index] for index in numbers]
+                                for numbers in plain_combinations[k]]
+                            for k in range(1, opponents+1)}
+        else:
+            combinations = {1: combinations}
+        self._combinations = combinations
+        self._num_combi = len(combinations)
+        # combinations["count"] = [len(combinations[k]) for k in combinations]
+        return combinations
+
     def __str__(self):
         output = ""
         for name, dice in self._dice.items():
@@ -54,6 +85,9 @@ class Hand:
 
     def get_faces(self):
         return [[face for face in die._list] for die in self._dice.values()]
+
+    def calculate_simplicity(self):
+        return sum(len(die._prob[1]) for die in self._dice.values())
 
     def fight(self, initiator: Dice, defender: Dice, lap: int, precision: int=5):
         """initiates a fight between two dice"""
@@ -100,7 +134,11 @@ class Hand:
                     if difference == 0:
                         place["result"] = ["tie", 0, message, winning]
 
-    def roll_the_dice(self, rolls: int=2, message: str="\t", accuracy: int=5):
+    def roll_the_dice(self,
+                      rolls: int=2,
+                      message: str="\t",
+                      accuracy: int=5,
+                      oppponents: int=1):
         """rolls the dice and saves the results"""
         self.initiate_dice(rolls)
         for attacker in self._dice.values():
@@ -140,6 +178,22 @@ class Hand:
         df = df[0: -2]
         return df
 
+    def raw_results(self, rolls=None, cut_off=0):
+        if rolls == None:
+            rolls = range(self._rolls_num)
+        rolls = sorted(rolls)
+        df = pd.DataFrame(columns=list(self._dice.keys()))
+
+        for defender in self._dice.values():
+            column = []
+            for roll in rolls:
+                for attacker in self._dice.values():
+                    chance = attacker.battles[roll][defender.name]["result"][3]
+                    biased = chance*(chance > cut_off)
+                    column.append(biased)
+            df[defender.name] = column
+        return df
+
     def get_die_performance(self, dice, index=3):
         performance = {k: [self._dice[dice].battles[k][opponent]["result"][index] 
                         for opponent in self._dice.keys()]
@@ -154,20 +208,19 @@ def roll_3_dice(n):
     h.add_die([0, 3, 3], "green")
     h.roll_the_dice(n, ".")
 
-    # print(h.get_die_performance("blue", 3))
-    print(h.frame_results())
+    print(h.frame_results([k+1 for k in range(n)]))
     return h
 
 def roll_Grime_dice(n):
     h = Hand()
-    h.add_die([2, 2, 2, 7, 7], "blue")
-    h.add_die([1, 1, 6, 6, 6], "magenta")
-    h.add_die([0, 5, 5, 5, 5], "olive")
-    h.add_die([4, 4, 4, 4, 4], "red")
-    h.add_die([3, 3, 3, 3, 8], "yellow")
+    h.add_die([2, 2, 2, 7, 7, 7], "blue")
+    h.add_die([1, 1, 6, 6, 6, 6], "magenta")
+    h.add_die([0, 5, 5, 5, 5, 5], "olive")
+    h.add_die([4, 4, 4, 4, 4, 9], "red")
+    h.add_die([3, 3, 3, 3, 8, 8], "yellow")
     h.roll_the_dice(n, ".")
 
-    print(h.frame_results([1, 2]))
+    print(h.frame_results([k+1 for k in range(n)]))
     return h
 
 def roll_Efron_dice(n):
@@ -178,22 +231,12 @@ def roll_Efron_dice(n):
     h.set_dice_set(dice, names)
     h.roll_the_dice(n, ".")
 
-    print(h.frame_results("split"))
+    print(h.frame_results([k+1 for k in range(n)]))
     return h
 
-def roll_adj_efron(n):
-    dice = [[4], [2, 2, 8], [1, 7], [0, 6, 6]]
-    names = ["blue", "red", "green", "yellow"]
-
-    h = Hand()
-    h.set_dice_set(dice, names)
-    h.roll_the_dice(n, ".")
-
-    print(h.frame_results("split"))
-    return h
 
 if __name__ == "__main__":
-    # hand = roll_3_dice(4)
-    grime = roll_Grime_dice(2)
-    # effron = roll_Efron_dice(2)
-    # adj = roll_adj_efron(2)
+    dice_to_roll = 2
+    # hand = roll_3_dice(dice_to_roll)
+    grime = roll_Grime_dice(dice_to_roll)
+    # effron = roll_Efron_dice(dice_to_roll)
